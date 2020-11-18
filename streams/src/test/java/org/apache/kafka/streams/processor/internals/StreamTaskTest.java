@@ -1582,7 +1582,7 @@ public class StreamTaskTest {
         task.postCommit(true);
         EasyMock.verify(stateManager);
     }
-    
+
     @Test
     public void shouldNotCheckpointForSuspendedRunningTaskWithSmallProgress() {
         EasyMock.expect(stateManager.changelogOffsets())
