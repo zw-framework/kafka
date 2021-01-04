@@ -17,6 +17,7 @@
 package org.apache.kafka.streams.processor.internals;
 
 import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.errors.TimeoutException;
@@ -121,7 +122,15 @@ public interface Task {
      */
     void completeRestoration();
 
+    /**
+     * Add to this task any records returned from the poll.
+     */
     void addRecords(TopicPartition partition, Iterable<ConsumerRecord<byte[], byte[]>> records);
+
+    /**
+     * Add to this task any metadata returned from the poll.
+     */
+    void addFetchedMetadata(TopicPartition partition, ConsumerRecords.Metadata metadata);
 
     boolean commitNeeded();
 
