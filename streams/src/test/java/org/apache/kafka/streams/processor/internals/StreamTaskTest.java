@@ -848,7 +848,7 @@ public class StreamTaskTest {
         assertTrue(task.maybePunctuateStreamTime());
 
         // tell the task that it doesn't need to wait for new data on partition1
-        task.addFetchedMetadata(partition1, new ConsumerRecords.Metadata(0L, 160L, 0, 160L));
+        task.addFetchedMetadata(partition1, new ConsumerRecords.Metadata(0L, 160L, 0L, 160L));
 
         // st: 161
         assertTrue(task.process(0L));
