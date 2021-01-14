@@ -342,6 +342,8 @@ subprojects {
       maxRetries = userMaxTestRetries
       maxFailures = userMaxTestRetryFailures
     }
+
+    reports.junitXml.mergeReruns = true
   }
 
   task integrationTest(type: Test, dependsOn: compileJava) {
@@ -377,6 +379,8 @@ subprojects {
       maxRetries = userMaxTestRetries
       maxFailures = userMaxTestRetryFailures
     }
+
+    reports.junitXml.mergeReruns = true
   }
 
   task unitTest(type: Test, dependsOn: compileJava) {
@@ -413,6 +417,8 @@ subprojects {
       maxRetries = userMaxTestRetries
       maxFailures = userMaxTestRetryFailures
     }
+
+    reports.junitXml.mergeReruns = true
   }
 
   jar {
