@@ -44,11 +44,13 @@ import scala.collection.mutable.ListBuffer
  *
  * Noted that if you add a future delayed operation that calls ReplicaManager.appendRecords() in onComplete()
  * like DelayedJoin, you must be aware that this operation's onExpiration() needs to call actionQueue.tryCompleteAction().
+ * 处理一些不立即执行而要等待满足一定条件之后才触发完成的操作称为延迟操作
  */
 abstract class DelayedOperation(override val delayMs: Long,
                                 lockOpt: Option[Lock] = None)
   extends TimerTask with Logging {
 
+  // 控制某个延迟操作
   private val completed = new AtomicBoolean(false)
   // Visible for testing
   private[server] val lock: Lock = lockOpt.getOrElse(new ReentrantLock)
@@ -64,6 +66,11 @@ abstract class DelayedOperation(override val delayMs: Long,
    * concurrent threads can try to complete the same operation, but only
    * the first thread will succeed in completing the operation and return
    * true, others will still return false
+   *
+   * 在条件满足时，检测延迟任务是否未被执行。若未被执行，则先调用TimerTask.cancel()方法解除该延迟操作与TimerTaskEntry的绑定，
+   * 将该延迟操作从TimerTaskList链表中移除，然后调用onComplete()方法让延迟操作执行完成。
+   * 通过completed的CAS原子操作（completed.compareAndSet），可以保证并发操作时只有第一个调用该方法的线程能够顺利调用onComplete()完成延迟操作，
+   * 其他线程获取的completed属性为false，即不会调用onComplete()方法，这就保证了onComplete()只会被调用一次。
    */
   def forceComplete(): Boolean = {
     if (completed.compareAndSet(false, true)) {
@@ -83,12 +90,27 @@ abstract class DelayedOperation(override val delayMs: Long,
 
   /**
    * Call-back to execute when a delayed operation gets expired and hence forced to complete.
+   *
+   * 由子类来实现当延迟操作已达失效时间的相应逻辑处理。
+   * Kafka通过SystemTimer来定期检测请求是否超时。SystemTimer是Kafka实现的底层基于层级时间轮和DelayQueue定时器，
+   * 维护了一个newFixedThreadPool线程池，用于提交相应的线程执行。
+   * 例如，当检测到延迟操作已失效时则将延迟操作提交到该线程池，即执行线程的run()方法的逻辑。
+   * DelayedOperation覆盖了TimerTask的run()方法，在该方法中先调用forceCompete()方法，当该方法返回true后再调用onExpiration()方法。
    */
   def onExpiration(): Unit
 
   /**
    * Process for completing an operation; This function needs to be defined
    * in subclasses and will be called exactly once in forceComplete()
+   *
+   * 在延迟时间（delayMs）内，onComplete()方法只被调用一次。
+   *
+   * 由子类来实现，执行延迟操作满足执行条件后需要执行的实际业务逻辑。
+   * 例如，DelayedProduce和DelayedFetch都是在该方法内调用responseCallback向客户端做出响应。
+   *
+   * Kafka当前的设计onComplete()方法是向客户端做出响应的唯一出口，
+   * 当延迟操作达到失效时间时也是先执行forceCompete()方法，让onComplete()方法执行之后再调用onExpiration()方法，
+   * 在onExpiration()方法中仅是进行相应的过期信息收集之类的操作。
    */
   def onComplete(): Unit
 
@@ -98,6 +120,8 @@ abstract class DelayedOperation(override val delayMs: Long,
    * forceComplete() and return true iff forceComplete returns true; otherwise return false
    *
    * This function needs to be defined in subclasses
+   *
+   * 抽象方法，由子类来实现，负责检测执行条件是否满足。若满足执行条件，则调用forceComplete()方法完成延迟操作。
    */
   def tryComplete(): Boolean
 
@@ -105,6 +129,8 @@ abstract class DelayedOperation(override val delayMs: Long,
    * Thread-safe variant of tryComplete() and call extra function if first tryComplete returns false
    * @param f else function to be executed after first tryComplete returns false
    * @return result of tryComplete
+   *
+   * 以synchronized同步锁调用onComplete()方法，供外部调用。
    */
   private[server] def safeTryCompleteOrElse(f: => Unit): Boolean = inLock(lock) {
     if (tryComplete()) true
@@ -146,6 +172,11 @@ object DelayedOperationPurgatory {
 
 /**
  * A helper purgatory class for bookkeeping delayed operations with a timeout, and expiring timed out operations.
+ *
+ * 辅助类.
+ *
+ * 以泛型的形式将一个DelayedOperation添加到其内部维护的Pool[Any, Watchers]类型watchersForKey对象中，
+ * 同时将DelayedOperation添加到SystemTimer中。
  */
 final class DelayedOperationPurgatory[T <: DelayedOperation](purgatoryName: String,
                                                              timeoutTimer: Timer,
@@ -345,11 +376,19 @@ final class DelayedOperationPurgatory[T <: DelayedOperation](purgatoryName: Stri
     def isEmpty: Boolean = operations.isEmpty
 
     // add the element to watch
+    // 将DelayedOperation添加到operations集合中
     def watch(t: T): Unit = {
       operations.add(t)
     }
 
     // traverse the list and try to complete some watched elements
+    /**
+     * 用于迭代operations集合中的DelayedOperation，通过DelayedOperation.isCompleted检测该DelayedOperation是否已执行完成。
+     * 若已执行完成，则从operations集合中移除该DelayedOperation。否则调用DelayedOperation.safeTryComplete()方法尝试让该DelayedOperation执行完成，
+     * 若执行完成，即safeTryComplete()方法返回true，则将该DelayedOperation从operations集合中移除。
+     * 最后检测operations集合是否为空，如果operations为空，则表示该operations所关联的DelayedOperation已全部执行完成，因此将该Watchers从Purgatory的Pool中移除。
+     * @return
+     */
     def tryCompleteWatched(): Int = {
       var completed = 0
 
